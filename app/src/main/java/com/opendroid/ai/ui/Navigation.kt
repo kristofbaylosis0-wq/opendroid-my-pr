@@ -235,6 +235,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Memory : Screen("memory", "Memory", Icons.Default.Star)
     object Macros : Screen("macros", "Macros", Icons.Default.Build)
     object History : Screen("history", "Logs", Icons.Default.History)
+    object Marketplace : Screen("marketplace", "Market", Icons.Default.Store)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
@@ -290,6 +291,7 @@ fun MainDashboard(
         Screen.Memory,
         Screen.Macros,
         Screen.History,
+        Screen.Marketplace,
         Screen.Settings
     )
 
@@ -344,6 +346,7 @@ fun MainDashboard(
                 Screen.Memory -> MemoryScreen(viewModel = memoryViewModel)
                 Screen.Macros -> MacrosScreen(viewModel = macroViewModel)
                 Screen.History -> LogsScreen(viewModel = historyViewModel)
+                Screen.Marketplace -> ComposioMarketplaceScreen()
                 Screen.Settings -> SettingsScreen(
                     viewModel = settingsViewModel,
                     onNavigateToBenchmark = onNavigateToBenchmark,
