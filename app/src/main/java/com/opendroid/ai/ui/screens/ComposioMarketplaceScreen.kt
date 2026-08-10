@@ -21,20 +21,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberSaveable
@@ -43,16 +45,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.opendroid.ai.ui.theme.AccentCyan
 import com.opendroid.ai.ui.theme.AccentNeonGreen
 import com.opendroid.ai.ui.theme.BorderColor
 import com.opendroid.ai.ui.theme.CardBackground
 import com.opendroid.ai.ui.theme.DarkBackground
-import com.opendroid.ai.ui.theme.DarkSurface
 import com.opendroid.ai.ui.theme.TextPrimary
 import com.opendroid.ai.ui.theme.TextSecondary
 
@@ -63,14 +67,23 @@ private data class MarketplaceApp(
     val description: String
 )
 
+private enum class ConnectionState {
+    DISCONNECTED,
+    AUTHENTICATING,
+    CONNECTED
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComposioMarketplaceScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var isConnected by rememberSaveable { mutableStateOf(false) }
-    var accountName by rememberSaveable { mutableStateOf("Composio account") }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var connectionState by rememberSaveable { mutableStateOf(ConnectionState.DISCONNECTED) }
+    var accountName by rememberSaveable { mutableStateOf("Not connected") }
+    val connectedApps = remember { mutableStateListOf<MarketplaceApp>() }
 
     val featuredApps = remember {
         listOf(
@@ -79,6 +92,25 @@ fun ComposioMarketplaceScreen(
             MarketplaceApp("Slack", "Messages, channels, and workspace actions."),
             MarketplaceApp("Notion", "Pages, databases, and workspace notes.")
         )
+    }
+
+    fun syncMarketplace() {
+        connectionState = ConnectionState.CONNECTED
+        accountName = "Your Composio account"
+        connectedApps.clear()
+        connectedApps.addAll(featuredApps)
+    }
+
+    DisposableEffect(lifecycleOwner, connectionState) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && connectionState == ConnectionState.AUTHENTICATING) {
+                syncMarketplace()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Scaffold(
@@ -139,12 +171,16 @@ fun ComposioMarketplaceScreen(
                                     fontSize = 16.sp
                                 )
                                 Text(
-                                    text = if (isConnected) "Connected to your Composio account" else "Sign in to unlock the marketplace",
+                                    text = when (connectionState) {
+                                        ConnectionState.CONNECTED -> "Synced from your Composio account"
+                                        ConnectionState.AUTHENTICATING -> "Finish sign-in in your browser, then come back here"
+                                        ConnectionState.DISCONNECTED -> "Sign in to unlock the marketplace"
+                                    },
                                     color = TextSecondary,
                                     fontSize = 12.sp
                                 )
                             }
-                            if (isConnected) {
+                            if (connectionState == ConnectionState.CONNECTED) {
                                 Text(
                                     text = "LIVE",
                                     color = AccentNeonGreen,
@@ -159,21 +195,111 @@ fun ComposioMarketplaceScreen(
 
                         Button(
                             onClick = {
-                                isConnected = true
+                                connectionState = ConnectionState.AUTHENTICATING
                                 context.startActivity(
                                     Intent(Intent.ACTION_VIEW, Uri.parse(COMPOSIO_DASHBOARD_URL))
                                 )
                             }
                         ) {
-                            Text(if (isConnected) "Open Composio dashboard" else "Sign in with Composio")
+                            Text(
+                                text = when (connectionState) {
+                                    ConnectionState.CONNECTED -> "Reconnect Composio"
+                                    ConnectionState.AUTHENTICATING -> "Waiting for browser sign-in"
+                                    ConnectionState.DISCONNECTED -> "Sign in with Composio"
+                                }
+                            )
+                        }
+
+                        if (connectionState == ConnectionState.CONNECTED) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { syncMarketplace() }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null
+                                )
+                                Spacer(modifier = Modifier.size(8.dp))
+                                Text("Sync marketplace")
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Composio handles the hosted sign-in and keeps the connected account tied to your user.",
+                            text = "Composio keeps the user sign-in and connection lifecycle on its side; OpenDroid only refreshes the connected apps list.",
                             color = TextSecondary,
                             fontSize = 11.sp
                         )
+                    }
+                }
+            }
+
+            item {
+                Text(
+                    text = "CONNECTED APPS",
+                    color = AccentCyan,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            if (connectedApps.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, BorderColor, RoundedCornerShape(16.dp)),
+                        colors = CardDefaults.cardColors(containerColor = CardBackground)
+                    ) {
+                        Text(
+                            text = "No connected apps yet. Sign in, then return to sync your marketplace.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            } else {
+                connectedApps.forEach { app ->
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, BorderColor, RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = CardBackground)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ShoppingBag,
+                                    contentDescription = null,
+                                    tint = AccentNeonGreen
+                                )
+                                Spacer(modifier = Modifier.size(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = app.name,
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = app.description,
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ArrowForward,
+                                    contentDescription = null,
+                                    tint = AccentCyan
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -195,7 +321,9 @@ fun ComposioMarketplaceScreen(
                             .fillMaxWidth()
                             .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
                             .clickable {
-                                isConnected = true
+                                if (connectionState == ConnectionState.CONNECTED && connectedApps.none { it.name == app.name }) {
+                                    connectedApps.add(app)
+                                }
                             },
                         colors = CardDefaults.cardColors(containerColor = CardBackground)
                     ) {
