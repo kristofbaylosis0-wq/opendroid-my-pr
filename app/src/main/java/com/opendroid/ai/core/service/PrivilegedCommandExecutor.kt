@@ -101,10 +101,13 @@ class PrivilegedCommandExecutor @Inject constructor() {
     }
 
     private fun rootAvailable(): Boolean = try {
-        ProcessBuilder("su", "-c", "id").start().use { process ->
+        val process = ProcessBuilder("su", "-c", "id").start()
+        try {
             process.inputStream.close()
             process.errorStream.close()
             process.waitFor() == 0
+        } finally {
+            process.destroy()
         }
     } catch (_: Throwable) {
         false
