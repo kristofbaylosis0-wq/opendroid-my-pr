@@ -16,6 +16,9 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,11 +35,13 @@ class McpServer @Inject constructor(
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private var serverThread: Thread? = null
+    private var requestExecutor: ExecutorService? = null
 
     @Synchronized
     fun start() {
         if (running.get()) return
         running.set(true)
+        requestExecutor = Executors.newFixedThreadPool(MAX_REQUEST_WORKERS)
         serverThread = Thread(::serve, THREAD_NAME).also { it.start() }
     }
 
@@ -46,6 +51,8 @@ class McpServer @Inject constructor(
         serverSocket?.close()
         serverSocket = null
         serverThread = null
+        requestExecutor?.shutdownNow()
+        requestExecutor = null
         terminalManager.closeAll()
     }
 
@@ -55,7 +62,15 @@ class McpServer @Inject constructor(
                 serverSocket = socket
                 while (running.get()) {
                     try {
-                        socket.accept().use(::handle)
+                        val client = socket.accept()
+                        try {
+                            requestExecutor?.execute {
+                                client.use(::handle)
+                            } ?: client.close()
+                        } catch (_: RejectedExecutionException) {
+                            client.close()
+                            if (running.get()) Log.w(TAG, "MCP request rejected because the server is stopping")
+                        }
                     } catch (error: Exception) {
                         if (running.get()) Log.e(TAG, "MCP request failed", error)
                     }
@@ -65,6 +80,8 @@ class McpServer @Inject constructor(
             if (running.get()) Log.e(TAG, "MCP server could not bind to port $PORT", error)
         } finally {
             running.set(false)
+            requestExecutor?.shutdownNow()
+            requestExecutor = null
             serverSocket = null
         }
     }
@@ -310,6 +327,7 @@ class McpServer @Inject constructor(
         const val MAX_REQUEST_BYTES = 1_048_576
         const val MAX_HEADER_LINE_BYTES = 8192
         const val REQUEST_TIMEOUT_MS = 15_000
+        const val MAX_REQUEST_WORKERS = 4
         const val THREAD_NAME = "OpenDroid-MCP"
     }
 }
