@@ -29,37 +29,57 @@ class PrivilegedCommandExecutor @Inject constructor() {
         require(command.isNotBlank()) { "Command must not be empty" }
         require(command.length <= MAX_COMMAND_LENGTH) { "Command is too long" }
 
-        when (val backend = selectBackend()) {
-            CommandBackend.SHIZUKU -> runShizuku(command, backend)
-            CommandBackend.ROOT -> runProcess(arrayOf("su", "-c", command), backend)
-            CommandBackend.APP_SHELL -> runProcess(arrayOf("sh", "-c", command), backend)
-            CommandBackend.UNAVAILABLE -> CommandExecutionResult(
-                backend = backend,
-                exitCode = -1,
-                stdout = "",
-                stderr = "No command execution backend is available"
-            )
+        var lastFailure: Throwable? = null
+        for (backend in availableBackends()) {
+            try {
+                return@withContext when (backend) {
+                    CommandBackend.SHIZUKU -> runShizuku(command, backend)
+                    CommandBackend.ROOT -> runProcess(arrayOf("su", "-c", command), backend)
+                    CommandBackend.APP_SHELL -> runProcess(arrayOf("sh", "-c", command), backend)
+                    CommandBackend.UNAVAILABLE -> error("Unreachable backend")
+                }
+            } catch (error: Throwable) {
+                lastFailure = error
+                Log.d(TAG, "Command backend $backend failed", error)
+            }
         }
+
+        CommandExecutionResult(
+            backend = CommandBackend.UNAVAILABLE,
+            exitCode = -1,
+            stdout = "",
+            stderr = lastFailure?.message ?: "No command execution backend is available"
+        )
     }
 
     fun status(): Map<String, String> = mapOf(
-        "backend" to selectBackend().name,
+        "backend" to (availableBackends().firstOrNull() ?: CommandBackend.UNAVAILABLE).name,
         "shizuku" to shizukuStatus(),
-        "root" to if (rootAvailable) "available" else "unavailable"
+        "root" to if (rootAvailable()) "available" else "unavailable"
     )
 
-    fun startShell(): Pair<CommandBackend, Process> = when (val backend = selectBackend()) {
-        CommandBackend.SHIZUKU -> backend to Shizuku.newProcess(arrayOf("sh"), null, null)
-        CommandBackend.ROOT -> backend to ProcessBuilder("su").redirectErrorStream(true).start()
-        CommandBackend.APP_SHELL -> backend to ProcessBuilder("sh").redirectErrorStream(true).start()
-        CommandBackend.UNAVAILABLE -> error("No command execution backend is available")
+    fun startShell(): Pair<CommandBackend, Process> {
+        var lastFailure: Throwable? = null
+        for (backend in availableBackends()) {
+            try {
+                return when (backend) {
+                    CommandBackend.SHIZUKU -> backend to Shizuku.newProcess(arrayOf("sh"), null, null)
+                    CommandBackend.ROOT -> backend to ProcessBuilder("su").redirectErrorStream(true).start()
+                    CommandBackend.APP_SHELL -> backend to ProcessBuilder("sh").redirectErrorStream(true).start()
+                    CommandBackend.UNAVAILABLE -> error("Unreachable backend")
+                }
+            } catch (error: Throwable) {
+                lastFailure = error
+                Log.d(TAG, "Shell backend $backend failed", error)
+            }
+        }
+        throw IllegalStateException(lastFailure?.message ?: "No command execution backend is available", lastFailure)
     }
 
-    private fun selectBackend(): CommandBackend = when {
-        shizukuAvailable() -> CommandBackend.SHIZUKU
-        rootAvailable -> CommandBackend.ROOT
-        appShellAvailable() -> CommandBackend.APP_SHELL
-        else -> CommandBackend.UNAVAILABLE
+    private fun availableBackends(): List<CommandBackend> = buildList {
+        if (shizukuAvailable()) add(CommandBackend.SHIZUKU)
+        if (rootAvailable()) add(CommandBackend.ROOT)
+        add(CommandBackend.APP_SHELL)
     }
 
     private fun shizukuAvailable(): Boolean = try {
@@ -80,19 +100,12 @@ class PrivilegedCommandExecutor @Inject constructor() {
         "unavailable"
     }
 
-    private val rootAvailable: Boolean by lazy {
-        try {
-            val process = ProcessBuilder("su", "-c", "id").start()
+    private fun rootAvailable(): Boolean = try {
+        ProcessBuilder("su", "-c", "id").start().use { process ->
             process.inputStream.close()
             process.errorStream.close()
             process.waitFor() == 0
-        } catch (_: Throwable) {
-            false
         }
-    }
-
-    private fun appShellAvailable(): Boolean = try {
-        ProcessBuilder("sh", "-c", "true").start().waitFor() == 0
     } catch (_: Throwable) {
         false
     }
